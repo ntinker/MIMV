@@ -30,10 +30,7 @@ Videos are typically compressed, so there may be some overhead when trying to de
 - Combine two loss functions:
   - **Reconstruction Loss**: L1 loss
   - **Adversarial Loss**: GAN loss
-- Total Loss:  
-  \[
-  \mathcal{L}_{total} = \mathcal{L}_{rec} + \lambda \mathcal{L}_{adv}
-  \]  
+  - **Total Loss**: `L_total = L_rec + λ * L_adv`
   *(Where λ balances the adversarial loss relative to the reconstruction loss)*
 
 ### Step 4: Evaluation and Validation
