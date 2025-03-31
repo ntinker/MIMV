@@ -133,24 +133,49 @@ python -m torch.distributed.launch --nproc_per_node 16 main_finetune.py \
 --cfg configs/swin_base__800ep/simmim_finetune__swin_base__img224_window7__800ep.yaml --batch-size 128 --data-path <imagenet-path> --pretrained <pretrained-ckpt> [--output <output-directory> --tag <job-tag>]
 ```
 
-## Contributing
+# MIMV
+**Masked Image Modeling for Video**
 
-This project welcomes contributions and suggestions.  Most contributions require you to agree to a
-Contributor License Agreement (CLA) declaring that you have the right to, and actually do, grant us
-the rights to use your contribution. For details, visit https://cla.opensource.microsoft.com.
+## Feedback & Considerations
 
-When you submit a pull request, a CLA bot will automatically determine whether you need to provide
-a CLA and decorate the PR appropriately (e.g., status check, comment). Simply follow the instructions
-provided by the bot. You will only need to do this once across all repos using our CLA.
+Videos are typically compressed, so there may be some overhead when trying to decompress, break into frames, and apply the model.
 
-This project has adopted the [Microsoft Open Source Code of Conduct](https://opensource.microsoft.com/codeofconduct/).
-For more information see the [Code of Conduct FAQ](https://opensource.microsoft.com/codeofconduct/faq/) or
-contact [opencode@microsoft.com](mailto:opencode@microsoft.com) with any additional questions or comments.
+- Perhaps we re-compress after application?
+- We can also check the SOTA video models to see how they handle this issue.
+- Otherwise, we can just bring it up as a pitfall.
+  - Could be interesting to quantify the impact of compression on computational complexity.
+- Don’t focus on PSNR and SSIM because they will likely be really bad.
+  - Still worth applying SSIM just to observe the behavior.
 
-## Trademarks
+---
 
-This project may contain trademarks or logos for projects, products, or services. Authorized use of Microsoft 
-trademarks or logos is subject to and must follow 
-[Microsoft's Trademark & Brand Guidelines](https://www.microsoft.com/en-us/legal/intellectualproperty/trademarks/usage/general).
-Use of Microsoft trademarks or logos in modified versions of this project must not cause confusion or imply Microsoft sponsorship.
-Any use of third-party trademarks or logos are subject to those third-party's policies.
+## Pipeline
+
+### Step 1: Dataset Preparation
+- Select a suitable video dataset with clear visual semantics  
+  *(e.g., Kinetics-400, UCF101)*
+- Preprocess videos into individual frames  
+  *(Each video becomes a sequence of frames)*
+
+### Step 2: Frame-by-Frame Masking Strategy
+- For each video clip:
+  - Apply random masking independently to each frame using SimMIM's simple masking strategy.
+
+### Step 3: Training Objectives
+- Combine two loss functions:
+  - **Reconstruction Loss**: L1 loss
+  - **Adversarial Loss**: GAN loss
+  - **Total Loss**: `L_total = L_rec + λ * L_adv`
+  *(Where λ balances the adversarial loss relative to the reconstruction loss)*
+
+### Step 4: Evaluation and Validation
+
+#### 1. Video Classification
+- Fine-tune learned representations on standard benchmarks  
+  *(e.g., Kinetics-400, UCF101)*
+
+#### 2. Video Reconstruction Quality
+- Measure quantitative metrics such as:
+  - **PSNR**
+  - **SSIM** *(just to see, even if results are poor)*
+
