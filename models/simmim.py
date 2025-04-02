@@ -14,6 +14,7 @@ from timm.models.layers import trunc_normal_
 
 from .swin_transformer import SwinTransformer
 from .vision_transformer import VisionTransformer
+from .discriminator import Discriminator
 
 
 class SwinTransformerForSimMIM(SwinTransformer):
@@ -96,10 +97,12 @@ class VisionTransformerForSimMIM(VisionTransformer):
 
 
 class SimMIM(nn.Module):
-    def __init__(self, encoder, encoder_stride):
+    def __init__(self, encoder, encoder_stride, use_adversarial=False, adv_weight=1.0):
         super().__init__()
         self.encoder = encoder
         self.encoder_stride = encoder_stride
+        self.use_adversarial = use_adversarial
+        self.adv_weight = adv_weight
 
         self.decoder = nn.Sequential(
             nn.Conv2d(
@@ -107,6 +110,9 @@ class SimMIM(nn.Module):
                 out_channels=self.encoder_stride ** 2 * 3, kernel_size=1),
             nn.PixelShuffle(self.encoder_stride),
         )
+
+        if self.use_adversarial:
+            self.discriminator = Discriminator()
 
         self.in_chans = self.encoder.in_chans
         self.patch_size = self.encoder.patch_size
@@ -118,7 +124,33 @@ class SimMIM(nn.Module):
         mask = mask.repeat_interleave(self.patch_size, 1).repeat_interleave(self.patch_size, 2).unsqueeze(1).contiguous()
         loss_recon = F.l1_loss(x, x_rec, reduction='none')
         loss = (loss_recon * mask).sum() / (mask.sum() + 1e-5) / self.in_chans
+
+        if self.use_adversarial:
+            # Real images classified as 1, reconstructed images as 0
+            real_pred = self.discriminator(x)   # Discriminator's prediction on real images
+            fake_pred = self.discriminator(x_rec)   # Discriminator's prediction on reconstructed images
+            
+            # Adversarial loss for generator (SimMIM)
+            loss_adv = F.binary_cross_entropy(fake_pred, torch.ones_like(fake_pred))
+            
+            # Total loss
+            loss = loss + self.adv_weight * loss_adv
+
         return loss
+
+    def get_discriminator_loss(self, x, x_rec):
+        """Compute discriminator loss separately"""
+        if not self.use_adversarial:
+            return None
+            
+        real_pred = self.discriminator(x)
+        fake_pred = self.discriminator(x_rec.detach())  # Detach to prevent generator update
+        
+        # Discriminator should classify real images as 1 and fake images as 0
+        loss_real = F.binary_cross_entropy(real_pred, torch.ones_like(real_pred))
+        loss_fake = F.binary_cross_entropy(fake_pred, torch.zeros_like(fake_pred))
+        
+        return loss_real + loss_fake
 
     @torch.jit.ignore
     def no_weight_decay(self):
@@ -177,6 +209,11 @@ def build_simmim(config):
     else:
         raise NotImplementedError(f"Unknown pre-train model: {model_type}")
 
-    model = SimMIM(encoder=encoder, encoder_stride=encoder_stride)
+    model = SimMIM(
+        encoder=encoder, 
+        encoder_stride=encoder_stride,
+        use_adversarial=config.MODEL.USE_ADVERSARIAL,
+        adv_weight=config.MODEL.ADV_WEIGHT
+    )
 
     return model
