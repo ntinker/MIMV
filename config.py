@@ -58,6 +58,12 @@ _C.MODEL.DROP_PATH_RATE = 0.1
 # Label Smoothing
 _C.MODEL.LABEL_SMOOTHING = 0.1
 
+# Adversarial training settings
+_C.MODEL.USE_ADVERSARIAL = False
+_C.MODEL.ADV_WEIGHT = 1.0
+_C.MODEL.DISC_LR = 2e-4  # Learning rate for discriminator
+_C.MODEL.DISC_UPDATE_FREQ = 1  # How often to update discriminator (1 means every step)
+
 # Swin Transformer parameters
 _C.MODEL.SWIN = CN()
 _C.MODEL.SWIN.PATCH_SIZE = 4
