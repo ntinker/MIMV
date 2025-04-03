@@ -120,10 +120,21 @@ def train_one_epoch(config, model, data_loader, optimizer, epoch, lr_scheduler):
     model.train()
     optimizer.zero_grad()
 
+    # Create discriminator optimizer if using adversarial training
+    if config.MODEL.USE_ADVERSARIAL:
+        disc_optimizer = torch.optim.Adam(
+            model.discriminator.parameters(),
+            lr=config.MODEL.DISC_LR,
+            betas=(0.5, 0.999)
+        )
+        disc_optimizer.zero_grad()
+
     num_steps = len(data_loader)
     batch_time = AverageMeter()
     loss_meter = AverageMeter()
     norm_meter = AverageMeter()
+    if config.MODEL.USE_ADVERSARIAL:
+        disc_loss_meter = AverageMeter()
 
     start = time.time()
     end = time.time()
@@ -131,7 +142,34 @@ def train_one_epoch(config, model, data_loader, optimizer, epoch, lr_scheduler):
         img = img.cuda(non_blocking=True)
         mask = mask.cuda(non_blocking=True)
 
-        loss = model(img, mask)
+        # Forward pass through the model
+        z = model.encoder(img, mask)
+        x_rec = model.decoder(z)
+
+        # Compute reconstruction loss
+        mask = mask.repeat_interleave(model.patch_size, 1).repeat_interleave(model.patch_size, 2).unsqueeze(1).contiguous()
+        loss_recon = F.l1_loss(img, x_rec, reduction='none')
+        loss = (loss_recon * mask).sum() / (mask.sum() + 1e-5) / model.in_chans
+
+        # Adversarial training
+        if config.MODEL.USE_ADVERSARIAL:
+            # Update discriminator
+            if idx % config.MODEL.DISC_UPDATE_FREQ == 0:
+                disc_loss = model.get_discriminator_loss(img, x_rec)
+                if config.AMP_OPT_LEVEL != "O0":
+                    with amp.scale_loss(disc_loss, disc_optimizer) as scaled_loss:
+                        scaled_loss.backward()
+                else:
+                    disc_loss.backward()
+                disc_optimizer.step()
+                disc_optimizer.zero_grad()
+                disc_loss_meter.update(disc_loss.item(), img.size(0))
+
+            # Update generator (SimMIM model)
+            real_pred = model.discriminator(img)
+            fake_pred = model.discriminator(x_rec)
+            loss_adv = F.binary_cross_entropy(fake_pred, torch.ones_like(fake_pred))
+            loss = loss + config.MODEL.ADV_WEIGHT * loss_adv
 
         if config.TRAIN.ACCUMULATION_STEPS > 1:
             loss = loss / config.TRAIN.ACCUMULATION_STEPS
@@ -181,15 +219,20 @@ def train_one_epoch(config, model, data_loader, optimizer, epoch, lr_scheduler):
             lr = optimizer.param_groups[0]['lr']
             memory_used = torch.cuda.max_memory_allocated() / (1024.0 * 1024.0)
             etas = batch_time.avg * (num_steps - idx)
-            logger.info(
+            log_msg = (
                 f'Train: [{epoch}/{config.TRAIN.EPOCHS}][{idx}/{num_steps}]\t'
                 f'eta {datetime.timedelta(seconds=int(etas))} lr {lr:.6f}\t'
                 f'time {batch_time.val:.4f} ({batch_time.avg:.4f})\t'
                 f'loss {loss_meter.val:.4f} ({loss_meter.avg:.4f})\t'
                 f'grad_norm {norm_meter.val:.4f} ({norm_meter.avg:.4f})\t'
-                f'mem {memory_used:.0f}MB')
+                f'mem {memory_used:.0f}MB'
+            )
+            if config.MODEL.USE_ADVERSARIAL:
+                log_msg += f'\tdisc_loss {disc_loss_meter.val:.4f} ({disc_loss_meter.avg:.4f})'
+            logger.info(log_msg)
     epoch_time = time.time() - start
     logger.info(f"EPOCH {epoch} training takes {datetime.timedelta(seconds=int(epoch_time))}")
+
 
 
 if __name__ == '__main__':
